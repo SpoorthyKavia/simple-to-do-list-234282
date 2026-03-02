@@ -1,8 +1,8 @@
 import { render, screen } from '@testing-library/react';
 import App from './App';
 
-test('renders learn react link', () => {
+test("renders the retro todo title and add button", () => {
   render(<App />);
-  const linkElement = screen.getByText(/learn react/i);
-  expect(linkElement).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: /retro to-do list/i })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /add/i })).toBeInTheDocument();
 });
