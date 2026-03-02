@@ -30,7 +30,10 @@ function createLocalStorageMock(initial = {}) {
 }
 
 function addTask(text) {
-  const input = screen.getByLabelText(/new task/i);
+  // In React 18 StrictMode, some queries can become ambiguous due to double-invocation.
+  // Selecting by id is unambiguous because the input is wired with htmlFor="newTask".
+  const input = document.getElementById("newTask");
+  expect(input).toBeTruthy();
   fireEvent.change(input, { target: { value: text } });
   fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
 }
@@ -83,7 +86,7 @@ describe("App critical flows", () => {
     // The title uses a non-breaking hyphen between "To" and "Do", so don't regex the hyphen.
     expect(screen.getByRole("heading", { name: /retro/i })).toBeInTheDocument();
 
-    expect(screen.getByLabelText(/new task/i)).toBeInTheDocument();
+    expect(document.getElementById("newTask")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^add$/i })).toBeInTheDocument();
 
     expect(screen.getByRole("button", { name: /^all/i })).toBeInTheDocument();
@@ -98,7 +101,7 @@ describe("App critical flows", () => {
 
     expect(screen.getByText("buy milk")).toBeInTheDocument();
     // After adding, input should clear
-    expect(screen.getByLabelText(/new task/i)).toHaveValue("");
+    expect(document.getElementById("newTask")).toHaveValue("");
   });
 
   test("toggles a task completion state (active -> completed -> active)", () => {
@@ -173,8 +176,15 @@ describe("App critical flows", () => {
     // 1) First mount: no tasks in storage
     render(<App />);
 
-    // On mount App probes storage availability and re-saves sanitized loaded tasks.
-    // With no tasks stored, it will still do a best-effort setItem with [].
+    // On mount App probes storage availability (setItem/removeItem) and then reads the key.
+    // In React 18 StrictMode, mount effects may run more than once, so assert "at least once".
+    expect(localStorageMock.setItem).toHaveBeenCalledWith(
+      "__retro_todo_storage_test__",
+      "1"
+    );
+    expect(localStorageMock.removeItem).toHaveBeenCalledWith(
+      "__retro_todo_storage_test__"
+    );
     expect(localStorageMock.getItem).toHaveBeenCalledWith(STORAGE_KEY);
 
     addTask("Persist me");
@@ -218,7 +228,14 @@ describe("App critical flows", () => {
     expect(screen.getByText("Hydrated active")).toBeInTheDocument();
     expect(screen.getByText("Hydrated done")).toBeInTheDocument();
 
-    // Ensure hydration read happens
+    // Ensure hydration read happens (after storage probe)
+    expect(localStorageMock.setItem).toHaveBeenCalledWith(
+      "__retro_todo_storage_test__",
+      "1"
+    );
+    expect(localStorageMock.removeItem).toHaveBeenCalledWith(
+      "__retro_todo_storage_test__"
+    );
     expect(localStorageMock.getItem).toHaveBeenCalledWith(STORAGE_KEY);
   });
 });
