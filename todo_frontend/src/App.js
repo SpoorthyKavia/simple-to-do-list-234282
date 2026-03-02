@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
 const STORAGE_KEY = "retro_todo_v1";
@@ -47,10 +47,28 @@ function coerceTask(t) {
 }
 
 /**
+ * Best-effort detection of whether localStorage is usable.
+ * In some environments (Safari private browsing, disabled storage, etc),
+ * merely accessing localStorage can throw.
+ */
+function isLocalStorageAvailable() {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return false;
+    const testKey = "__retro_todo_storage_test__";
+    window.localStorage.setItem(testKey, "1");
+    window.localStorage.removeItem(testKey);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Reads and sanitizes tasks from localStorage, tolerating corrupted or unexpected data.
- * Returns an empty array on any failure.
+ * Returns an empty array on any failure (including unavailable storage).
  */
 function loadTasksFromStorage() {
+  if (!isLocalStorageAvailable()) return [];
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
@@ -58,9 +76,7 @@ function loadTasksFromStorage() {
 
     if (!Array.isArray(parsed)) return [];
 
-    const sanitized = parsed
-      .map(coerceTask)
-      .filter(Boolean);
+    const sanitized = parsed.map(coerceTask).filter(Boolean);
 
     // Ensure stable ordering: newest first
     sanitized.sort((a, b) => b.createdAt - a.createdAt);
@@ -68,6 +84,24 @@ function loadTasksFromStorage() {
     return sanitized;
   } catch {
     return [];
+  }
+}
+
+/**
+ * Attempts to persist tasks to localStorage. Returns true on success, false on failure.
+ * Failure is intentionally non-fatal: the app continues in-memory.
+ */
+function persistTasksToStorage(tasks) {
+  if (!isLocalStorageAvailable()) return false;
+
+  try {
+    // Persist only the canonical task shape.
+    const canonical = tasks.map(coerceTask).filter(Boolean);
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(canonical));
+    return true;
+  } catch {
+    // Quota exceeded / disabled storage / other errors.
+    return false;
   }
 }
 
@@ -81,32 +115,43 @@ function App() {
   const [newTaskText, setNewTaskText] = useState("");
   const [filter, setFilter] = useState(FILTERS.all);
 
+  // Track whether persistence is currently working. This is used only to avoid
+  // repeated failing writes; it does NOT change in-memory behavior.
+  const [isStorageWorking, setIsStorageWorking] = useState(true);
+
+  // Avoid double-writing the "loaded" state on first mount.
+  const hasHydratedRef = useRef(false);
+
   // Load from localStorage once
   useEffect(() => {
-    const loaded = loadTasksFromStorage();
+    const storageOk = isLocalStorageAvailable();
+    setIsStorageWorking(storageOk);
+
+    const loaded = storageOk ? loadTasksFromStorage() : [];
     setTasks(loaded);
 
-    // If storage is corrupted/unexpected but not empty, proactively reset it
-    // so future runs don't repeatedly parse bad data.
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(loaded));
-    } catch {
-      // ignore
+    // If storage is available, proactively re-save sanitized data so future runs
+    // don't repeatedly parse bad/corrupted data. This is best-effort.
+    if (storageOk) {
+      const ok = persistTasksToStorage(loaded);
+      if (!ok) setIsStorageWorking(false);
     }
+
+    hasHydratedRef.current = true;
   }, []);
 
-  // Persist to localStorage on change
+  // Persist to localStorage on change (best-effort; never break in-memory)
   useEffect(() => {
-    try {
-      // Persist only the canonical task shape.
-      const canonical = tasks
-        .map(coerceTask)
-        .filter(Boolean);
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(canonical));
-    } catch {
-      // Ignore quota/disabled storage errors; app still functions in-memory
-    }
-  }, [tasks]);
+    // Don't immediately persist the state we just loaded on mount; we already did
+    // a best-effort sanitize+persist above.
+    if (!hasHydratedRef.current) return;
+
+    // If we've already detected storage failures, avoid repeatedly attempting writes.
+    if (!isStorageWorking) return;
+
+    const ok = persistTasksToStorage(tasks);
+    if (!ok) setIsStorageWorking(false);
+  }, [tasks, isStorageWorking]);
 
   const filteredTasks = useMemo(() => {
     if (filter === FILTERS.active) return tasks.filter((t) => !t.completed);
@@ -265,42 +310,58 @@ function App() {
                     ? "You’re all caught up — add a new task!"
                     : "Add your first task above."}
               </p>
+              {!isStorageWorking ? (
+                <p className="emptyHint">
+                  Note: Saving is unavailable (storage is disabled or full). Your
+                  tasks will still work for this session.
+                </p>
+              ) : null}
             </div>
           ) : (
-            <ul className="taskList">
-              {filteredTasks.map((t) => (
-                <li key={t.id} className={`task ${t.completed ? "done" : ""}`}>
-                  <button
-                    type="button"
-                    className="checkBtn"
-                    onClick={() => toggleTask(t.id)}
-                    aria-label={`${
-                      t.completed ? "Mark as active" : "Mark as completed"
-                    }: ${t.text}`}
-                    aria-pressed={t.completed}
-                  >
-                    <span className="checkBox" aria-hidden="true">
-                      {t.completed ? "✓" : ""}
-                    </span>
-                  </button>
-
-                  <div className="taskMain">
-                    <div className="taskText">{t.text}</div>
-                  </div>
-
-                  <div className="taskActions">
+            <>
+              {!isStorageWorking ? (
+                <div className="emptyState" role="status" aria-live="polite">
+                  <p className="emptyHint">
+                    Note: Saving is unavailable (storage is disabled or full). Your
+                    tasks will still work for this session.
+                  </p>
+                </div>
+              ) : null}
+              <ul className="taskList">
+                {filteredTasks.map((t) => (
+                  <li key={t.id} className={`task ${t.completed ? "done" : ""}`}>
                     <button
                       type="button"
-                      className="btn btnSmall btnDanger"
-                      onClick={() => deleteTask(t.id)}
-                      aria-label={`Delete task: ${t.text}`}
+                      className="checkBtn"
+                      onClick={() => toggleTask(t.id)}
+                      aria-label={`${
+                        t.completed ? "Mark as active" : "Mark as completed"
+                      }: ${t.text}`}
+                      aria-pressed={t.completed}
                     >
-                      Delete
+                      <span className="checkBox" aria-hidden="true">
+                        {t.completed ? "✓" : ""}
+                      </span>
                     </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
+
+                    <div className="taskMain">
+                      <div className="taskText">{t.text}</div>
+                    </div>
+
+                    <div className="taskActions">
+                      <button
+                        type="button"
+                        className="btn btnSmall btnDanger"
+                        onClick={() => deleteTask(t.id)}
+                        aria-label={`Delete task: ${t.text}`}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
         </section>
 
