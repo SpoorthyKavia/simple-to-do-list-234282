@@ -8,6 +8,69 @@ const FILTERS = /** @type {const} */ ({
   completed: "completed",
 });
 
+const TASK_TEXT_MAX_LEN = 120;
+
+/**
+ * Normalizes user-entered task text.
+ * - Trims leading/trailing whitespace
+ * - Collapses internal whitespace runs to a single space
+ * - Enforces a max length (defensive; input maxLength is not enough)
+ */
+function normalizeTaskText(raw) {
+  return String(raw ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, TASK_TEXT_MAX_LEN);
+}
+
+/**
+ * Ensures an unknown value conforms to our Task model, or returns null.
+ * @param {unknown} t
+ * @returns {{ id: string, text: string, completed: boolean, createdAt: number } | null}
+ */
+function coerceTask(t) {
+  if (!t || typeof t !== "object") return null;
+
+  // @ts-ignore - runtime coercion from unknown shape
+  const id = String(t.id ?? cryptoRandomId());
+  // @ts-ignore - runtime coercion from unknown shape
+  const text = normalizeTaskText(t.text ?? "");
+  // @ts-ignore - runtime coercion from unknown shape
+  const completed = Boolean(t.completed);
+  // @ts-ignore - runtime coercion from unknown shape
+  const createdAtRaw = Number(t.createdAt);
+
+  const createdAt = Number.isFinite(createdAtRaw) ? createdAtRaw : Date.now();
+  if (!text) return null;
+
+  return { id, text, completed, createdAt };
+}
+
+/**
+ * Reads and sanitizes tasks from localStorage, tolerating corrupted or unexpected data.
+ * Returns an empty array on any failure.
+ */
+function loadTasksFromStorage() {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+
+    if (!Array.isArray(parsed)) return [];
+
+    const sanitized = parsed
+      .map(coerceTask)
+      .filter(Boolean);
+
+    // Ensure stable ordering: newest first
+    sanitized.sort((a, b) => b.createdAt - a.createdAt);
+
+    return sanitized;
+  } catch {
+    return [];
+  }
+}
+
 // PUBLIC_INTERFACE
 function App() {
   /**
@@ -20,34 +83,26 @@ function App() {
 
   // Load from localStorage once
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
+    const loaded = loadTasksFromStorage();
+    setTasks(loaded);
 
-      // Defensive parsing to avoid runtime issues if storage is corrupted
-      if (Array.isArray(parsed)) {
-        const sanitized = parsed
-          .filter((t) => t && typeof t === "object")
-          .map((t) => ({
-            id: String(t.id ?? cryptoRandomId()),
-            text: String(t.text ?? "").trim(),
-            completed: Boolean(t.completed),
-            createdAt: Number(t.createdAt ?? Date.now()),
-          }))
-          .filter((t) => t.text.length > 0);
-        setTasks(sanitized);
-      }
+    // If storage is corrupted/unexpected but not empty, proactively reset it
+    // so future runs don't repeatedly parse bad data.
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(loaded));
     } catch {
-      // If parsing fails, start fresh; do not crash the app
-      setTasks([]);
+      // ignore
     }
   }, []);
 
   // Persist to localStorage on change
   useEffect(() => {
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+      // Persist only the canonical task shape.
+      const canonical = tasks
+        .map(coerceTask)
+        .filter(Boolean);
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(canonical));
     } catch {
       // Ignore quota/disabled storage errors; app still functions in-memory
     }
@@ -67,12 +122,12 @@ function App() {
 
   // PUBLIC_INTERFACE
   const addTask = (text) => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
+    const normalized = normalizeTaskText(text);
+    if (!normalized) return;
 
     const task = {
       id: cryptoRandomId(),
-      text: trimmed,
+      text: normalized,
       completed: false,
       createdAt: Date.now(),
     };
@@ -103,6 +158,8 @@ function App() {
     addTask(newTaskText);
   };
 
+  const isAddDisabled = normalizeTaskText(newTaskText).length === 0;
+
   return (
     <div className="App">
       <div className="retroBg" aria-hidden="true" />
@@ -129,10 +186,10 @@ function App() {
               value={newTaskText}
               onChange={(e) => setNewTaskText(e.target.value)}
               placeholder="Type a new task…"
-              maxLength={120}
+              maxLength={TASK_TEXT_MAX_LEN}
               autoComplete="off"
             />
-            <button className="btn btnPrimary" type="submit">
+            <button className="btn btnPrimary" type="submit" disabled={isAddDisabled}>
               Add
             </button>
           </form>
@@ -263,12 +320,31 @@ function App() {
  */
 function cryptoRandomId() {
   try {
+    // Prefer standard API when present.
     if (typeof window !== "undefined" && window.crypto?.randomUUID) {
       return window.crypto.randomUUID();
+    }
+
+    // Fallback: RFC4122-ish v4 UUID using getRandomValues when available.
+    if (typeof window !== "undefined" && window.crypto?.getRandomValues) {
+      const bytes = new Uint8Array(16);
+      window.crypto.getRandomValues(bytes);
+
+      // Per RFC4122 section 4.4
+      bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+      bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10
+
+      const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(
+        16,
+        20
+      )}-${hex.slice(20)}`;
     }
   } catch {
     // ignore
   }
+
+  // Last-resort fallback (still unique enough for this app).
   return `t_${Math.random().toString(16).slice(2)}_${Date.now()}`;
 }
 
