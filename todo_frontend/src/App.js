@@ -166,6 +166,7 @@ function App() {
             type="button"
             className={`tab ${filter === FILTERS.all ? "isActive" : ""}`}
             onClick={() => setFilter(FILTERS.all)}
+            aria-pressed={filter === FILTERS.all}
           >
             All <span className="tabCount">{counts.total}</span>
           </button>
@@ -173,6 +174,7 @@ function App() {
             type="button"
             className={`tab ${filter === FILTERS.active ? "isActive" : ""}`}
             onClick={() => setFilter(FILTERS.active)}
+            aria-pressed={filter === FILTERS.active}
           >
             Active <span className="tabCount">{counts.active}</span>
           </button>
@@ -180,6 +182,7 @@ function App() {
             type="button"
             className={`tab ${filter === FILTERS.completed ? "isActive" : ""}`}
             onClick={() => setFilter(FILTERS.completed)}
+            aria-pressed={filter === FILTERS.completed}
           >
             Completed <span className="tabCount">{counts.completed}</span>
           </button>
@@ -187,11 +190,17 @@ function App() {
 
         <section className="listCard" aria-label="Task list">
           {filteredTasks.length === 0 ? (
-            <div className="emptyState">
+            <div className="emptyState" role="status" aria-live="polite">
               <div className="emptyIcon" aria-hidden="true">
                 ▢
               </div>
-              <p className="emptyTitle">No tasks here.</p>
+              <p className="emptyTitle">
+                {filter === FILTERS.completed
+                  ? "No completed tasks."
+                  : filter === FILTERS.active
+                    ? "No active tasks."
+                    : "No tasks yet."}
+              </p>
               <p className="emptyHint">
                 {filter === FILTERS.completed
                   ? "Complete a task to see it here."
@@ -208,9 +217,9 @@ function App() {
                     type="button"
                     className="checkBtn"
                     onClick={() => toggleTask(t.id)}
-                    aria-label={
+                    aria-label={`${
                       t.completed ? "Mark as active" : "Mark as completed"
-                    }
+                    }: ${t.text}`}
                     aria-pressed={t.completed}
                   >
                     <span className="checkBox" aria-hidden="true">
