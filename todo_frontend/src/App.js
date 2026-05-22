@@ -149,6 +149,8 @@ function App() {
 
     const onSubmit = (e) => {
         e.preventDefault();
+        // Avoid creating tasks while inline-editing another task to keep UI state simple/predictable.
+        if (editingTaskId) return;
         addTask(newTaskText);
     };
 
@@ -180,6 +182,8 @@ function App() {
                             placeholder="Type a new task…"
                             maxLength={120}
                             autoComplete="off"
+                            disabled={Boolean(editingTaskId)}
+                            aria-disabled={Boolean(editingTaskId)}
                         />
                         <button className="btn btnPrimary" type="submit">
                             Add
